@@ -6,6 +6,7 @@ En GitHub Actions guarda en data/AAAA-MM-DD/; en local, en local/AAAA-MM-DD/ (ig
 import json
 import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -62,6 +63,7 @@ SECCIONES_EXCLUIDAS = {
     "elviajero", "favorito", "loteria-navidad", "capaces",
 }
 PREFIJO_OPINION = "opinión"  # 20minutos marca así la opinión dentro de secciones normales
+MAX_BYTES_TXT = 30_000  # tamaño máximo de cada .txt para el lector de Cowork
 
 ATOM = "{http://www.w3.org/2005/Atom}"
 DC_DATE = "{http://purl.org/dc/elements/1.1/}date"
@@ -246,6 +248,66 @@ def informe(filas, fecha, origen):
     return "\n".join(lineas) + "\n"
 
 
+def slug(texto):
+    texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", texto.lower()).strip("-")
+
+
+def clave_url(url):
+    return url.split("#")[0].split("?")[0].rstrip("/").lower()
+
+
+def sin_duplicados(titulares):
+    """Una sola entrada por URL (portada primero); si falta la fecha, se toma de la otra."""
+    unicos = {}
+    for t in titulares:
+        k = clave_url(t["url"])
+        if k not in unicos:
+            unicos[k] = dict(t)
+        elif not unicos[k]["fecha_publicacion"]:
+            unicos[k]["fecha_publicacion"] = t["fecha_publicacion"]
+    return list(unicos.values())
+
+
+def escribir_txt(carpeta, todos, hora_ejecucion):
+    """Un .txt compacto por medio (partido si pasa de MAX_BYTES_TXT) e indice.txt."""
+    for viejo in carpeta.glob("*.txt"):
+        viejo.unlink()
+    indice = []
+    for m in MEDIOS:
+        unicos = sin_duplicados([t for t in todos if t["medio"] == m["medio"]])
+        capturado = unicos[0]["capturado_en"] if unicos else hora_ejecucion
+        lineas = [f"{t['titular'].replace('|', '/')} | {t['url']} | {t['fecha_publicacion'] or ''}"
+                  for t in unicos]
+
+        # Reparte las líneas en partes que no pasen del límite (con margen para la cabecera)
+        partes, actual, tam = [], [], 0
+        for linea in lineas:
+            n = len(linea.encode("utf-8")) + 1
+            if actual and tam + n > MAX_BYTES_TXT - 400:
+                partes.append(actual)
+                actual, tam = [], 0
+            actual.append(linea)
+            tam += n
+        partes.append(actual)
+
+        base = slug(m["medio"])
+        for i, parte in enumerate(partes, 1):
+            nombre = f"{base}.txt" if len(partes) == 1 else f"{base}-{i}.txt"
+            cabecera = [f"Medio: {m['medio']}", f"Capturado: {capturado}",
+                        f"Total titulares del medio: {len(lineas)}"]
+            if len(partes) > 1:
+                cabecera.append(f"Parte {i} de {len(partes)}: {len(parte)} titulares")
+            cabecera += ["Formato: titular | url | fecha_publicacion", ""]
+            (carpeta / nombre).write_text("\n".join(cabecera + parte) + "\n", encoding="utf-8")
+            indice.append((nombre, len(parte)))
+
+    total = sum(n for _, n in indice)
+    texto = [f"Archivos del día ({total} titulares en total):", ""]
+    texto += [f"{nombre}: {n} titulares" for nombre, n in indice]
+    (carpeta / "indice.txt").write_text("\n".join(texto) + "\n", encoding="utf-8")
+
+
 def main():
     en_actions = os.environ.get("GITHUB_ACTIONS") == "true"
     fecha = ahora().strftime("%Y-%m-%d")
@@ -265,6 +327,7 @@ def main():
         json.dumps(todos, ensure_ascii=False, indent=2), encoding="utf-8")
     origen = "GitHub Actions" if en_actions else "local (casa)"
     (carpeta / "informe.md").write_text(informe(filas, fecha, origen), encoding="utf-8")
+    escribir_txt(carpeta, todos, ahora().isoformat(timespec="seconds"))
     print(f"Guardado en {carpeta}")
 
 
