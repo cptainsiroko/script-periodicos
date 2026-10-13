@@ -1,0 +1,10 @@
+Archivos del día (604 titulares en total):
+
+el-pais.txt: 93 titulares
+el-mundo.txt: 35 titulares
+abc.txt: 45 titulares
+eldiario-es.txt: 97 titulares
+okdiario.txt: 89 titulares
+europa-press.txt: 85 titulares
+rtve.txt: 53 titulares
+20minutos.txt: 107 titulares
